@@ -8,7 +8,7 @@ require (
 )
 
 // Temporarily replace the official libdns spaceship implementation to the fixed one (PR on official one is still open)
-replace github.com/libdns/spaceship => github.com/empressmarissa/libdns_spaceship v1.0.0
+replace github.com/libdns/spaceship => github.com/empressmarissa/libdns_spaceship v1.1.0
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
