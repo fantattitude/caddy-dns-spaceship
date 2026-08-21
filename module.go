@@ -8,12 +8,19 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
-	libdnsspaceship "github.com/libdns/spaceship"
+	libdnsspaceship "github.com/empressmarissa/libdns_spaceship"
 )
 
-// Provider lets Caddy read and manipulate DNS records hosted by the Spaceship DNS provider.
-// It adapts the libdns spaceship provider for use in Caddy.
-type Provider struct{ *libdnsspaceship.Provider }
+// Provider lets Caddy read and manipulate DNS records hosted by the Spaceship
+// DNS provider. It adapts the libdns Spaceship provider for use in Caddy.
+type Provider struct {
+	*libdnsspaceship.Provider
+
+	// APITimeout is the HTTP timeout configured by Caddy. The maintained
+	// libdns provider deliberately does not serialize its HTTPClient, so this
+	// adapter-owned field keeps the setting in JSON configurations.
+	APITimeout caddy.Duration `json:"api_timeout,omitempty"`
+}
 
 func init() {
 	caddy.RegisterModule(Provider{})
@@ -22,134 +29,189 @@ func init() {
 // CaddyModule returns the Caddy module information.
 func (Provider) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
-		ID:  "dns.providers.spaceship",
-		New: func() caddy.Module { return &Provider{new(libdnsspaceship.Provider)} },
+		ID: "dns.providers.spaceship",
+		New: func() caddy.Module {
+			return &Provider{Provider: new(libdnsspaceship.Provider)}
+		},
 	}
+}
+
+func (p *Provider) ensureProvider() error {
+	if p == nil {
+		return fmt.Errorf("spaceship: provider is nil")
+	}
+	if p.Provider == nil {
+		p.Provider = new(libdnsspaceship.Provider)
+	}
+	return nil
 }
 
 // Provision sets up the module. Implements caddy.Provisioner.
 func (p *Provider) Provision(ctx caddy.Context) error {
-	// Single replacer instance for all placeholder expansions
-	repl := caddy.NewReplacer()
-	// Expand placeholders for fields that may already be set from Caddyfile
-	p.Provider.APIKey = repl.ReplaceAll(p.Provider.APIKey, "")
-	p.Provider.APISecret = repl.ReplaceAll(p.Provider.APISecret, "")
-	p.Provider.BaseURL = repl.ReplaceAll(p.Provider.BaseURL, "")
-
-	// Populate any still-empty fields from environment variables (libdns helper)
-	p.Provider.PopulateFromEnv()
-
-	// Re-expand in case env values contain placeholders (unlikely but cheap)
-	p.Provider.APIKey = repl.ReplaceAll(p.Provider.APIKey, "")
-	p.Provider.APISecret = repl.ReplaceAll(p.Provider.APISecret, "")
-	p.Provider.BaseURL = repl.ReplaceAll(p.Provider.BaseURL, "")
-
-	// Ensure HTTP client has a timeout
-	if p.Provider.HTTPClient != nil && p.Provider.HTTPClient.Timeout == 0 {
-		p.Provider.HTTPClient.Timeout = 30 * time.Second
+	if err := p.ensureProvider(); err != nil {
+		return err
 	}
 
-	if p.Provider.APIKey == "" || p.Provider.APISecret == "" {
+	// Expand placeholders before environment fallback so explicit Caddy
+	// configuration wins, while an unresolved/empty field can still use the
+	// maintained provider's environment handling.
+	repl := caddy.NewReplacer()
+	p.APIKey = repl.ReplaceAll(p.APIKey, "")
+	p.APISecret = repl.ReplaceAll(p.APISecret, "")
+	p.BaseURL = repl.ReplaceAll(p.BaseURL, "")
+	p.Provider.PopulateFromEnv()
+
+	// Environment values may themselves contain placeholders. This is cheap,
+	// and keeps the behavior of the original adapter.
+	p.APIKey = repl.ReplaceAll(p.APIKey, "")
+	p.APISecret = repl.ReplaceAll(p.APISecret, "")
+	p.BaseURL = repl.ReplaceAll(p.BaseURL, "")
+
+	if p.PageSize < 0 {
+		return fmt.Errorf("spaceship: page_size must not be negative")
+	}
+	if p.APITimeout < 0 {
+		return fmt.Errorf("spaceship: api_timeout must not be negative")
+	}
+
+	// An explicit adapter timeout takes precedence over a client timeout. If a
+	// caller supplied a client, preserve it and only repair a zero timeout;
+	// otherwise leave a nil client alone so libdns can apply its 30s default.
+	if p.APITimeout > 0 {
+		if p.HTTPClient == nil {
+			p.HTTPClient = &http.Client{}
+		}
+		p.HTTPClient.Timeout = time.Duration(p.APITimeout)
+	} else if p.HTTPClient != nil && p.HTTPClient.Timeout == 0 {
+		p.HTTPClient.Timeout = 30 * time.Second
+	}
+
+	if p.APIKey == "" || p.APISecret == "" {
 		return fmt.Errorf("spaceship: api_key and api_secret are required")
 	}
 	return nil
 }
 
-// UnmarshalCaddyfile sets up the DNS provider from Caddyfile tokens. Syntax:
-//
-//     providername [<api_token>] {
-//         api_token <api_token>
-//     }
-//
-// **THIS IS JUST AN EXAMPLE AND NEEDS TO BE CUSTOMIZED.**
+// UnmarshalCaddyfile sets up the DNS provider from Caddyfile tokens. The
+// optional inline form is `spaceship <api_key> <api_secret>`; block options
+// are documented in README.md.
 func (p *Provider) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	if err := p.ensureProvider(); err != nil {
+		return err
+	}
+
+	seen := make(map[string]bool)
 	for d.Next() {
-		// Optional inline args: api_key [api_secret]
+		// Optional inline args: api_key api_secret.
 		if d.NextArg() {
-			p.Provider.APIKey = d.Val()
+			if p.APIKey != "" || seen["api_key"] {
+				return d.Err("api_key already set")
+			}
+			p.APIKey = d.Val()
+			seen["api_key"] = true
 		}
 		if d.NextArg() {
-			p.Provider.APISecret = d.Val()
+			if p.APISecret != "" || seen["api_secret"] {
+				return d.Err("api_secret already set")
+			}
+			p.APISecret = d.Val()
+			seen["api_secret"] = true
 		}
-		if d.NextArg() { // too many inline args
+		if d.NextArg() {
 			return d.ArgErr()
 		}
+
 		for nesting := d.Nesting(); d.NextBlock(nesting); {
-			switch d.Val() {
-			case "api_key":
-				if p.Provider.APIKey != "" {
-					return d.Err("api_key already set")
-				}
+			name := d.Val()
+			canonical := map[string]string{
+				"api_key":      "api_key",
+				"api_secret":   "api_secret",
+				"apisecret":    "api_secret",
+				"api_url":      "base_url",
+				"api_baseurl":  "base_url",
+				"base_url":     "base_url",
+				"api_pagesize": "page_size",
+				"pagesize":     "page_size",
+				"page_size":    "page_size",
+				"api_timeout":  "api_timeout",
+				"timeout":      "api_timeout",
+			}[name]
+			if canonical == "" {
+				return d.Errf("unrecognized subdirective '%s'", name)
+			}
+			if seen[canonical] {
+				return d.Errf("%s already set", canonical)
+			}
+			seen[canonical] = true
+
+			switch canonical {
+			case "api_key", "api_secret", "base_url":
 				if !d.NextArg() {
-					return d.Err("api_key requires value")
+					return d.Errf("%s requires value", name)
 				}
-				p.Provider.APIKey = d.Val()
-				if d.NextArg() { // no extra args
-					return d.ArgErr()
-				}
-			case "api_secret":
-				if p.Provider.APISecret != "" {
-					return d.Err("api_secret already set")
-				}
-				if !d.NextArg() {
-					return d.Err("api_secret requires value")
-				}
-				p.Provider.APISecret = d.Val()
+				value := d.Val()
 				if d.NextArg() {
 					return d.ArgErr()
 				}
-			case "api_url":
-				if p.Provider.BaseURL != "" {
-					return d.Err("api_url already set")
+				switch canonical {
+				case "api_key":
+					if p.APIKey != "" {
+						return d.Err("api_key already set")
+					}
+					p.APIKey = value
+				case "api_secret":
+					if p.APISecret != "" {
+						return d.Err("api_secret already set")
+					}
+					p.APISecret = value
+				case "base_url":
+					if p.BaseURL != "" {
+						return d.Err("base_url already set")
+					}
+					p.BaseURL = value
 				}
+			case "page_size":
 				if !d.NextArg() {
-					return d.Err("api_url requires value")
+					return d.Errf("%s requires value", name)
 				}
-				p.Provider.BaseURL = d.Val()
+				pageSize, err := strconv.Atoi(d.Val())
+				if err != nil || pageSize <= 0 {
+					return d.Errf("%s must be a positive integer", name)
+				}
 				if d.NextArg() {
 					return d.ArgErr()
 				}
-			case "api_pagesize":
-				if !d.NextArg() {
-					return d.Err("api_pagesize requires value")
+				if p.PageSize != 0 {
+					return d.Err("page_size already set")
 				}
-				ps, err := strconv.Atoi(d.Val())
-				if err != nil || ps <= 0 {
-					return d.Err("api_pagesize must be a positive integer")
-				}
-				p.Provider.PageSize = ps
-				if d.NextArg() {
-					return d.ArgErr()
-				}
+				p.PageSize = pageSize
 			case "api_timeout":
 				if !d.NextArg() {
-					return d.Err("api_timeout requires value (seconds)")
+					return d.Errf("%s requires value (seconds)", name)
 				}
-				secs, err := strconv.Atoi(d.Val())
-				if err != nil || secs <= 0 {
-					return d.Err("api_timeout must be a positive integer (seconds)")
-				}
-				if p.Provider.HTTPClient == nil {
-					p.Provider.HTTPClient = &http.Client{Timeout: time.Duration(secs) * time.Second}
-				} else {
-					p.Provider.HTTPClient.Timeout = time.Duration(secs) * time.Second
+				seconds, err := strconv.Atoi(d.Val())
+				if err != nil || seconds <= 0 {
+					return d.Errf("%s must be a positive integer (seconds)", name)
 				}
 				if d.NextArg() {
 					return d.ArgErr()
 				}
-			default:
-				return d.Errf("unrecognized subdirective '%s'", d.Val())
+				if p.APITimeout != 0 {
+					return d.Err("api_timeout already set")
+				}
+				p.APITimeout = caddy.Duration(time.Duration(seconds) * time.Second)
 			}
 		}
 	}
-	if p.Provider.APIKey == "" || p.Provider.APISecret == "" {
+	if p.APIKey == "" || p.APISecret == "" {
 		return d.Err("missing api_key or api_secret")
 	}
 	return nil
 }
 
-// Interface guards
+// Interface guards.
 var (
-	_ caddyfile.Unmarshaler = (*Provider)(nil)
+	_ caddy.Module          = (*Provider)(nil)
 	_ caddy.Provisioner     = (*Provider)(nil)
+	_ caddyfile.Unmarshaler = (*Provider)(nil)
 )
