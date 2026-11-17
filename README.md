@@ -1,12 +1,16 @@
 # Spaceship DNS provider module for Caddy
 
-[![CI](https://github.com/empressmarissa/caddy-dns-spaceship/actions/workflows/ci.yml/badge.svg)](https://github.com/empressmarissa/caddy-dns-spaceship/actions/workflows/ci.yml)
-
-This maintained fork provides a [Caddy](https://caddyserver.com/) DNS provider
+This fork of [empressmarissa/caddy-dns-spaceship](https://github.com/empressmarissa/caddy-dns-spaceship) provides a [Caddy](https://caddyserver.com/) DNS provider
 for the [Spaceship DNS API](https://www.spaceship.com/). It adapts
 [`github.com/empressmarissa/libdns_spaceship`](https://github.com/empressmarissa/libdns_spaceship)
 v1.2.0 and keeps the Caddy module ID and provider name used by the upstream
 adapter.
+
+When setting A or AAAA records, the adapter replaces an existing single address
+by adding the new one and deleting the old one. If multiple records of the same
+name and type already exist, it returns an error instead of choosing one. A
+failed deletion can leave both addresses present and requires manual cleanup.
+Other record types, including ACME TXT records, keep the upstream behavior.
 
 ## Install
 
@@ -14,7 +18,7 @@ Build Caddy with [xcaddy](https://github.com/caddyserver/xcaddy), using the
 released adapter module:
 
 ```sh
-xcaddy build --with github.com/empressmarissa/caddy-dns-spaceship@v1.2.0
+xcaddy build --with github.com/fantattitude/caddy-dns-spaceship
 ```
 
 The adapter requires Caddy v2.10.2 or newer. The dependency chain is direct:

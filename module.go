@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -15,6 +16,7 @@ import (
 // DNS provider. It adapts the libdns Spaceship provider for use in Caddy.
 type Provider struct {
 	*libdnsspaceship.Provider
+	setMu sync.Mutex
 
 	// APITimeout is the HTTP timeout configured by Caddy. The maintained
 	// libdns provider deliberately does not serialize its HTTPClient, so this

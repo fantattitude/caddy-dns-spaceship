@@ -1,4 +1,4 @@
-module github.com/empressmarissa/caddy-dns-spaceship
+module github.com/fantattitude/caddy-dns-spaceship
 
 go 1.25.0
 
