@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libdns/libdns"
 )
@@ -69,5 +70,27 @@ func TestSetRecordsFailures(t *testing.T) {
 	f = &fakeRecords{existing: existing, deleteErr: errors.New("unavailable")}
 	if _, err := setRecords(context.Background(), f, "example.com.", wanted); err == nil || len(f.calls) != 3 {
 		t.Fatal("failed delete must be reported")
+	}
+}
+
+func TestTTLHandling(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		existing  []libdns.Record
+		requested time.Duration
+		want      time.Duration
+	}{
+		{"preserve", []libdns.Record{libdns.RR{Name: "@", Type: "A", Data: "1.1.1.1", TTL: 30 * time.Minute}}, 0, 30 * time.Minute},
+		{"override", []libdns.Record{libdns.RR{Name: "@", Type: "A", Data: "1.1.1.1", TTL: 30 * time.Minute}}, 5 * time.Minute, 5 * time.Minute},
+		{"new", nil, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := libdns.RR{Name: "@", Type: "A", Data: "8.8.8.8", TTL: tc.requested}
+			f := &fakeRecords{existing: tc.existing}
+			updated, err := setRecords(context.Background(), f, "example.com.", []libdns.Record{record})
+			if err != nil || len(updated) != 1 || updated[0].RR().TTL != tc.want {
+				t.Fatalf("updated %v, error %v", updated, err)
+			}
+		})
 	}
 }

@@ -1,6 +1,6 @@
 # Spaceship DNS for Caddy
 
-A fork of [empressmarissa/caddy-dns-spaceship](https://github.com/empressmarissa/caddy-dns-spaceship) that replaces an existing A or AAAA address when it changes. It returns an error if multiple records already exist for the same name and type; those need to be cleaned up separately.
+A fork of [empressmarissa/caddy-dns-spaceship](https://github.com/empressmarissa/caddy-dns-spaceship) that replaces an existing A or AAAA address when it changes. It preserves the record's TTL unless a new one is specified. It returns an error if multiple records already exist for the same name and type; those need to be cleaned up separately.
 
 Build Caddy with:
 

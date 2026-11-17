@@ -51,7 +51,8 @@ func (p *Provider) SetRecords(ctx context.Context, zone string, records []libdns
 
 func setRecords(ctx context.Context, provider recordProvider, zone string, records []libdns.Record) ([]libdns.Record, error) {
 	wanted := make(map[recordKey]netip.Addr)
-	for _, record := range records {
+	indexes := make(map[recordKey]int)
+	for i, record := range records {
 		if nilRecord(record) {
 			return nil, fmt.Errorf("spaceship: nil record")
 		}
@@ -69,6 +70,7 @@ func setRecords(ctx context.Context, provider recordProvider, zone string, recor
 			return nil, fmt.Errorf("spaceship: multiple desired %s records for %s", typ, rr.Name)
 		}
 		wanted[key] = ip
+		indexes[key] = i
 	}
 	if len(wanted) == 0 {
 		return provider.SetRecords(ctx, zone, records)
@@ -79,6 +81,7 @@ func setRecords(ctx context.Context, provider recordProvider, zone string, recor
 		return nil, fmt.Errorf("spaceship: list existing records: %w", err)
 	}
 	seen := make(map[recordKey]bool)
+	updates := append([]libdns.Record(nil), records...)
 	var obsolete []libdns.Record
 	for _, record := range existing {
 		if nilRecord(record) {
@@ -98,6 +101,12 @@ func setRecords(ctx context.Context, provider recordProvider, zone string, recor
 		if err != nil {
 			return nil, fmt.Errorf("spaceship: invalid existing %s record for %s", key.typ, key.name)
 		}
+		index := indexes[key]
+		incoming := updates[index].RR()
+		if incoming.TTL == 0 {
+			incoming.TTL = rr.TTL
+			updates[index] = incoming
+		}
 		if old != ip {
 			obsolete = append(obsolete, record)
 		}
@@ -105,7 +114,7 @@ func setRecords(ctx context.Context, provider recordProvider, zone string, recor
 
 	// Create the replacement first so an API failure does not remove the only
 	// address. A failed delete is reported and can leave both addresses present.
-	updated, err := provider.SetRecords(ctx, zone, records)
+	updated, err := provider.SetRecords(ctx, zone, updates)
 	if err != nil {
 		return nil, fmt.Errorf("spaceship: set records: %w", err)
 	}

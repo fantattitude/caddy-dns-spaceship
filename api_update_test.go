@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/libdns/libdns"
@@ -28,9 +27,10 @@ func TestUpdateUsesRelativeNamesAndDeletesOldAddress(t *testing.T) {
 				Items []struct {
 					Name    string `json:"name"`
 					Address string `json:"address"`
+					TTL     int    `json:"ttl"`
 				} `json:"items"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&p); err != nil || len(p.Items) != 1 || p.Items[0].Name != "@" || p.Items[0].Address != "2001:db8::2" {
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil || len(p.Items) != 1 || p.Items[0].Name != "@" || p.Items[0].Address != "2001:db8::2" || p.Items[0].TTL != 300 {
 				t.Errorf("invalid put: %+v, %v", p, err)
 			}
 			w.WriteHeader(204)
@@ -56,7 +56,7 @@ func TestUpdateUsesRelativeNamesAndDeletesOldAddress(t *testing.T) {
 	if err := p.Provision(caddy.Context{}); err != nil {
 		t.Fatal(err)
 	}
-	rec := libdns.RR{Name: "example.com.", Type: "AAAA", Data: "2001:db8::2", TTL: time.Minute}
+	rec := libdns.RR{Name: "example.com.", Type: "AAAA", Data: "2001:db8::2"}
 	if _, err := p.SetRecords(context.Background(), "example.com.", []libdns.Record{rec}); err != nil {
 		t.Fatal(err)
 	}
